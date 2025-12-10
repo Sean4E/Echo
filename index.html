@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Echo | Body Music Instrument</title>
 
     <!-- PWA Meta Tags -->
@@ -29,6 +29,10 @@
             background: #0a0a0f;
             overflow: hidden;
             color: #fff;
+            touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
         }
 
         #mainCanvas {
@@ -497,6 +501,310 @@
         .status-panel::-webkit-scrollbar-thumb {
             background: rgba(255,255,255,0.1);
             border-radius: 2px;
+        }
+
+        /* ==================== MOBILE RESPONSIVE ==================== */
+
+        /* Tablet and smaller laptops */
+        @media (max-width: 1024px) {
+            .status-panel {
+                width: 200px;
+                padding: 16px;
+                bottom: 190px;
+            }
+
+            #videoContainer {
+                width: 220px;
+                height: 124px;
+            }
+
+            .help-panel {
+                max-width: 280px;
+                padding: 14px;
+            }
+        }
+
+        /* Mobile landscape and small tablets */
+        @media (max-width: 768px) {
+            #overlay {
+                padding: 12px 16px;
+            }
+
+            .logo-icon {
+                width: 32px;
+                height: 32px;
+            }
+
+            h1 {
+                font-size: 1.5rem;
+            }
+
+            .subtitle {
+                display: none;
+            }
+
+            .controls {
+                top: auto;
+                bottom: 16px;
+                left: 16px;
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .btn {
+                padding: 10px 16px;
+                font-size: 0.8rem;
+                gap: 6px;
+            }
+
+            .mode-selector {
+                width: 100%;
+                margin-top: 8px;
+                flex-wrap: wrap;
+            }
+
+            .mode-btn {
+                padding: 8px 12px;
+                font-size: 0.7rem;
+            }
+
+            .status-panel {
+                top: 70px;
+                right: 12px;
+                bottom: auto;
+                width: 180px;
+                padding: 12px;
+                max-height: 45vh;
+            }
+
+            .status-panel h3 {
+                font-size: 0.7rem;
+                margin-bottom: 10px;
+            }
+
+            .instrument-icon {
+                font-size: 1rem;
+                width: 22px;
+            }
+
+            .instrument-name {
+                font-size: 0.75rem;
+                width: 40px;
+            }
+
+            .settings-panel {
+                margin-top: 12px;
+                padding-top: 12px;
+            }
+
+            .settings-panel h4 {
+                font-size: 0.65rem;
+                margin-bottom: 8px;
+            }
+
+            .setting-row {
+                margin-bottom: 10px;
+            }
+
+            .setting-row label {
+                font-size: 0.6rem;
+            }
+
+            .setting-row select {
+                padding: 6px 10px;
+                font-size: 0.75rem;
+            }
+
+            #videoContainer {
+                width: 160px;
+                height: 90px;
+                bottom: 12px;
+                right: 12px;
+            }
+
+            .help-panel {
+                display: none;
+            }
+
+            .recording-indicator {
+                top: 12px;
+                right: auto;
+                left: 50%;
+                transform: translateX(-50%);
+                padding: 8px 14px;
+                font-size: 0.75rem;
+            }
+
+            .trigger-flash {
+                font-size: 3rem;
+            }
+        }
+
+        /* Mobile portrait */
+        @media (max-width: 480px) {
+            #overlay {
+                padding: 10px 12px;
+            }
+
+            .logo-icon {
+                width: 28px;
+                height: 28px;
+            }
+
+            h1 {
+                font-size: 1.3rem;
+            }
+
+            .controls {
+                bottom: 12px;
+                left: 12px;
+                right: 12px;
+                gap: 6px;
+            }
+
+            .btn {
+                padding: 10px 14px;
+                font-size: 0.75rem;
+                flex: 1;
+                justify-content: center;
+            }
+
+            .mode-selector {
+                gap: 4px;
+            }
+
+            .mode-btn {
+                padding: 6px 10px;
+                font-size: 0.65rem;
+                flex: 1;
+                text-align: center;
+            }
+
+            .status-panel {
+                top: 60px;
+                right: 8px;
+                width: 150px;
+                padding: 10px;
+                max-height: 40vh;
+            }
+
+            .instrument-row {
+                gap: 6px;
+            }
+
+            .instrument-icon {
+                font-size: 0.9rem;
+                width: 20px;
+            }
+
+            .instrument-name {
+                display: none;
+            }
+
+            .instrument-bar {
+                height: 5px;
+            }
+
+            .setting-row select {
+                padding: 5px 8px;
+                font-size: 0.7rem;
+            }
+
+            #videoContainer {
+                width: 120px;
+                height: 68px;
+                bottom: 100px;
+                right: 8px;
+            }
+
+            .trigger-flash {
+                font-size: 2.5rem;
+            }
+
+            .loading-logo {
+                width: 60px;
+                height: 60px;
+            }
+
+            .loader {
+                width: 36px;
+                height: 36px;
+            }
+
+            .loading-text {
+                font-size: 0.75rem;
+            }
+        }
+
+        /* Very small screens / landscape phones */
+        @media (max-height: 500px) {
+            #overlay {
+                padding: 8px 12px;
+            }
+
+            .logo-container {
+                margin-bottom: 0;
+            }
+
+            .logo-icon {
+                width: 24px;
+                height: 24px;
+            }
+
+            h1 {
+                font-size: 1.1rem;
+            }
+
+            .status-panel {
+                top: 50px;
+                max-height: 50vh;
+                padding: 8px;
+            }
+
+            .settings-panel {
+                display: none;
+            }
+
+            .controls {
+                bottom: 8px;
+                left: 8px;
+            }
+
+            .btn {
+                padding: 8px 12px;
+                font-size: 0.7rem;
+            }
+
+            #videoContainer {
+                width: 100px;
+                height: 56px;
+                bottom: 8px;
+            }
+        }
+
+        /* Touch-friendly adjustments */
+        @media (hover: none) and (pointer: coarse) {
+            .btn {
+                min-height: 44px;
+            }
+
+            .mode-btn {
+                min-height: 40px;
+            }
+
+            .setting-row select {
+                min-height: 40px;
+            }
+
+            #videoContainer:hover {
+                transform: none;
+                opacity: 0.85;
+            }
+
+            .btn:hover:not(:disabled) {
+                transform: none;
+            }
         }
     </style>
 </head>
