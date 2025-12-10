@@ -1005,9 +1005,13 @@
                 octaveRange: [3, 5],        // Left hand lower, right hand higher
             },
             drums: {
-                nodThreshold: 0.025,       // Increased - need more deliberate nods
-                tiltThreshold: 0.035,      // Increased - need more deliberate tilts
-                cooldown: 180,             // Longer cooldown to prevent accidental triggers
+                // Absolute angle thresholds (like finger-thumb touch detection)
+                // When head crosses threshold, trigger. When returns to neutral, reset.
+                nodDownThreshold: 0.025,    // How far down to nod for kick (~5 degrees)
+                nodUpThreshold: -0.02,      // How far up to nod for snare (~4 degrees)
+                tiltThreshold: 0.03,        // How far to tilt for hi-hat/tom (~5 degrees)
+                neutralZone: 0.012,         // Dead zone around neutral position
+                cooldown: 150,              // ms between same drum triggers
             },
             particles: {
                 maxParticles: 1500,
@@ -1050,7 +1054,14 @@
                     }
                 ]
             },
-            drums: { level: 0, lastTrigger: {}, prevHead: null, smoothedHead: null },
+            drums: {
+                level: 0,
+                lastTrigger: {},
+                baselineHead: null,        // Neutral head position (calibrated)
+                smoothedHead: null,
+                // Track trigger states like finger-touch (triggered when crossing threshold, reset at neutral)
+                triggered: { kick: false, snare: false, hihat: false, tom: false }
+            },
             particles: [],
             isRecording: false,
             isPlaying: false,
@@ -1739,6 +1750,9 @@
             state.strings.level *= 0.9;
         }
 
+        // Drum detection using absolute head position thresholds
+        // Works like finger-thumb touch: cross threshold = trigger, return to neutral = reset
+        // This allows small, comfortable, repeatable head movements
         function processDrums(faceLandmarks, blendshapes) {
             if (state.mode === 'voice' || state.mode === 'strings') {
                 state.drums.level = 0;
@@ -1747,97 +1761,125 @@
 
             if (!faceLandmarks) {
                 state.drums.level = 0;
-                state.drums.prevHead = null;
+                state.drums.baselineHead = null;
                 state.drums.smoothedHead = null;
-                state.drums.velocityBuffer = null;
                 return;
             }
 
             const now = Date.now();
+
+            // Get head position from face landmarks
             const noseTip = faceLandmarks[1];
             const forehead = faceLandmarks[10];
+            const chin = faceLandmarks[152];
             const leftCheek = faceLandmarks[234];
             const rightCheek = faceLandmarks[454];
 
-            const headY = (noseTip.y + forehead.y) / 2;
-            const headX = (leftCheek.x + rightCheek.x) / 2;
-            const headTilt = leftCheek.y - rightCheek.y;
+            // Calculate head angles
+            // Nod: vertical angle (positive = looking down, negative = looking up)
+            const nod = noseTip.y - forehead.y;
+            // Tilt: side-to-side roll (positive = tilt left, negative = tilt right)
+            const tilt = leftCheek.y - rightCheek.y;
 
-            // Smooth head position with lighter smoothing for more responsiveness
+            // Smooth the values for stability
             if (!state.drums.smoothedHead) {
-                state.drums.smoothedHead = { y: headY, x: headX, tilt: headTilt };
-                state.drums.velocityBuffer = { y: [], tilt: [] };
+                state.drums.smoothedHead = { nod, tilt };
             } else {
-                state.drums.smoothedHead.y = smooth(state.drums.smoothedHead.y, headY, 0.4);
-                state.drums.smoothedHead.x = smooth(state.drums.smoothedHead.x, headX, 0.4);
-                state.drums.smoothedHead.tilt = smooth(state.drums.smoothedHead.tilt, headTilt, 0.4);
+                state.drums.smoothedHead.nod = smooth(state.drums.smoothedHead.nod, nod, 0.5);
+                state.drums.smoothedHead.tilt = smooth(state.drums.smoothedHead.tilt, tilt, 0.5);
             }
 
-            if (state.drums.prevHead) {
-                const velY = state.drums.smoothedHead.y - state.drums.prevHead.y;
-                const tiltChange = state.drums.smoothedHead.tilt - state.drums.prevHead.tilt;
+            // Auto-calibrate baseline on first detection (neutral head position)
+            if (!state.drums.baselineHead) {
+                state.drums.baselineHead = {
+                    nod: state.drums.smoothedHead.nod,
+                    tilt: state.drums.smoothedHead.tilt
+                };
+                return; // Wait a frame to establish baseline
+            }
 
-                // Buffer velocities for more robust detection (average over last few frames)
-                state.drums.velocityBuffer.y.push(velY);
-                state.drums.velocityBuffer.tilt.push(tiltChange);
-                if (state.drums.velocityBuffer.y.length > 3) state.drums.velocityBuffer.y.shift();
-                if (state.drums.velocityBuffer.tilt.length > 3) state.drums.velocityBuffer.tilt.shift();
+            // Calculate offset from neutral position
+            const nodOffset = state.drums.smoothedHead.nod - state.drums.baselineHead.nod;
+            const tiltOffset = state.drums.smoothedHead.tilt - state.drums.baselineHead.tilt;
 
-                const avgVelY = state.drums.velocityBuffer.y.reduce((a, b) => a + b, 0) / state.drums.velocityBuffer.y.length;
-                const avgTiltChange = state.drums.velocityBuffer.tilt.reduce((a, b) => a + b, 0) / state.drums.velocityBuffer.tilt.length;
+            // Slowly drift baseline toward current position (prevents drift over time)
+            state.drums.baselineHead.nod = smooth(state.drums.baselineHead.nod, state.drums.smoothedHead.nod, 0.005);
+            state.drums.baselineHead.tilt = smooth(state.drums.baselineHead.tilt, state.drums.smoothedHead.tilt, 0.005);
 
-                // NOD DOWN = KICK (requires consistent downward motion)
-                if (avgVelY > CONFIG.drums.nodThreshold &&
-                    (!state.drums.lastTrigger.kick || now - state.drums.lastTrigger.kick > CONFIG.drums.cooldown)) {
-                    const velocity = mapRange(Math.abs(avgVelY), CONFIG.drums.nodThreshold, 0.06, 0.6, 1);
+            const cfg = CONFIG.drums;
+
+            // NOD DOWN = KICK
+            // Trigger when head nods down past threshold
+            if (nodOffset > cfg.nodDownThreshold) {
+                if (!state.drums.triggered.kick &&
+                    (!state.drums.lastTrigger.kick || now - state.drums.lastTrigger.kick > cfg.cooldown)) {
+                    const velocity = mapRange(nodOffset, cfg.nodDownThreshold, cfg.nodDownThreshold * 2, 0.7, 1);
                     audioEngine.drums.trigger('kick', velocity, state.drumKit);
-                    emitParticles(canvas.width / 2, canvas.height / 2 + 100, 'rgb(100, 255, 100)', 'drums', 20);
+                    emitParticles(canvas.width / 2, canvas.height / 2 + 80, 'rgb(100, 255, 100)', 'drums', 15);
                     showTrigger('⬇');
                     state.drums.lastTrigger.kick = now;
                     state.drums.level = 1;
-                    state.drums.velocityBuffer.y = []; // Clear buffer after trigger
+                    state.drums.triggered.kick = true;
                     recordEvent('drum', { drum: 'kick', velocity, color: 'rgb(100, 255, 100)', emoji: '⬇' });
                 }
+            } else if (nodOffset < cfg.neutralZone) {
+                // Reset when head returns toward neutral
+                state.drums.triggered.kick = false;
+            }
 
-                // NOD UP = SNARE (requires consistent upward motion)
-                else if (avgVelY < -CONFIG.drums.nodThreshold &&
-                    (!state.drums.lastTrigger.snare || now - state.drums.lastTrigger.snare > CONFIG.drums.cooldown)) {
-                    const velocity = mapRange(Math.abs(avgVelY), CONFIG.drums.nodThreshold, 0.06, 0.6, 1);
+            // NOD UP = SNARE
+            // Trigger when head tilts up past threshold
+            if (nodOffset < cfg.nodUpThreshold) {
+                if (!state.drums.triggered.snare &&
+                    (!state.drums.lastTrigger.snare || now - state.drums.lastTrigger.snare > cfg.cooldown)) {
+                    const velocity = mapRange(Math.abs(nodOffset), Math.abs(cfg.nodUpThreshold), Math.abs(cfg.nodUpThreshold) * 2, 0.7, 1);
                     audioEngine.drums.trigger('snare', velocity, state.drumKit);
-                    emitParticles(canvas.width / 2, canvas.height / 2 - 50, 'rgb(255, 255, 150)', 'drums', 20);
+                    emitParticles(canvas.width / 2, canvas.height / 2 - 50, 'rgb(255, 255, 150)', 'drums', 15);
                     showTrigger('⬆');
                     state.drums.lastTrigger.snare = now;
                     state.drums.level = 1;
-                    state.drums.velocityBuffer.y = []; // Clear buffer after trigger
+                    state.drums.triggered.snare = true;
                     recordEvent('drum', { drum: 'snare', velocity, color: 'rgb(255, 255, 150)', emoji: '⬆' });
                 }
-
-                // TILT LEFT = HI-HAT (requires consistent tilt)
-                if (avgTiltChange > CONFIG.drums.tiltThreshold &&
-                    (!state.drums.lastTrigger.hihat || now - state.drums.lastTrigger.hihat > CONFIG.drums.cooldown)) {
-                    const velocity = mapRange(Math.abs(avgTiltChange), CONFIG.drums.tiltThreshold, 0.08, 0.5, 0.8);
-                    audioEngine.drums.trigger('hihat', velocity, state.drumKit);
-                    emitParticles(canvas.width / 2 - 100, canvas.height / 2, 'rgb(255, 255, 200)', 'drums', 10);
-                    state.drums.lastTrigger.hihat = now;
-                    state.drums.level = 0.7;
-                    state.drums.velocityBuffer.tilt = []; // Clear buffer after trigger
-                    recordEvent('drum', { drum: 'hihat', velocity, color: 'rgb(255, 255, 200)', emoji: '◀' });
-                }
-
-                // TILT RIGHT = TOM (requires consistent tilt)
-                else if (avgTiltChange < -CONFIG.drums.tiltThreshold &&
-                    (!state.drums.lastTrigger.tom || now - state.drums.lastTrigger.tom > CONFIG.drums.cooldown)) {
-                    const velocity = mapRange(Math.abs(avgTiltChange), CONFIG.drums.tiltThreshold, 0.08, 0.6, 0.9);
-                    audioEngine.drums.trigger('tom', velocity, state.drumKit);
-                    emitParticles(canvas.width / 2 + 100, canvas.height / 2, 'rgb(150, 255, 100)', 'drums', 15);
-                    state.drums.lastTrigger.tom = now;
-                    state.drums.level = 0.8;
-                    state.drums.velocityBuffer.tilt = []; // Clear buffer after trigger
-                    recordEvent('drum', { drum: 'tom', velocity, color: 'rgb(150, 255, 100)', emoji: '▶' });
-                }
+            } else if (nodOffset > -cfg.neutralZone) {
+                // Reset when head returns toward neutral
+                state.drums.triggered.snare = false;
             }
 
-            state.drums.prevHead = { y: state.drums.smoothedHead.y, x: state.drums.smoothedHead.x, tilt: state.drums.smoothedHead.tilt };
+            // TILT LEFT = HI-HAT
+            if (tiltOffset > cfg.tiltThreshold) {
+                if (!state.drums.triggered.hihat &&
+                    (!state.drums.lastTrigger.hihat || now - state.drums.lastTrigger.hihat > cfg.cooldown)) {
+                    const velocity = mapRange(tiltOffset, cfg.tiltThreshold, cfg.tiltThreshold * 2, 0.6, 0.9);
+                    audioEngine.drums.trigger('hihat', velocity, state.drumKit);
+                    emitParticles(canvas.width / 2 - 80, canvas.height / 2, 'rgb(255, 255, 200)', 'drums', 10);
+                    showTrigger('◀');
+                    state.drums.lastTrigger.hihat = now;
+                    state.drums.level = 0.8;
+                    state.drums.triggered.hihat = true;
+                    recordEvent('drum', { drum: 'hihat', velocity, color: 'rgb(255, 255, 200)', emoji: '◀' });
+                }
+            } else if (tiltOffset < cfg.neutralZone) {
+                state.drums.triggered.hihat = false;
+            }
+
+            // TILT RIGHT = TOM
+            if (tiltOffset < -cfg.tiltThreshold) {
+                if (!state.drums.triggered.tom &&
+                    (!state.drums.lastTrigger.tom || now - state.drums.lastTrigger.tom > cfg.cooldown)) {
+                    const velocity = mapRange(Math.abs(tiltOffset), cfg.tiltThreshold, cfg.tiltThreshold * 2, 0.7, 1);
+                    audioEngine.drums.trigger('tom', velocity, state.drumKit);
+                    emitParticles(canvas.width / 2 + 80, canvas.height / 2, 'rgb(150, 255, 100)', 'drums', 12);
+                    showTrigger('▶');
+                    state.drums.lastTrigger.tom = now;
+                    state.drums.level = 0.9;
+                    state.drums.triggered.tom = true;
+                    recordEvent('drum', { drum: 'tom', velocity, color: 'rgb(150, 255, 100)', emoji: '▶' });
+                }
+            } else if (tiltOffset > -cfg.neutralZone) {
+                state.drums.triggered.tom = false;
+            }
+
             state.drums.level *= 0.9;
         }
 
