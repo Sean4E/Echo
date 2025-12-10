@@ -1,0 +1,40 @@
+<svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="echoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00d9ff"/>
+      <stop offset="50%" style="stop-color:#00ff88"/>
+      <stop offset="100%" style="stop-color:#ff6b6b"/>
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0f"/>
+      <stop offset="100%" style="stop-color:#1a1a2e"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bgGrad)"/>
+
+  <!-- Outer ring - sound wave -->
+  <circle cx="256" cy="256" r="200" stroke="url(#echoGrad)" stroke-width="12" fill="none" opacity="0.25"/>
+
+  <!-- Middle ring - sound wave -->
+  <circle cx="256" cy="256" r="150" stroke="url(#echoGrad)" stroke-width="10" fill="none" opacity="0.45"/>
+
+  <!-- Inner ring - sound wave -->
+  <circle cx="256" cy="256" r="100" stroke="url(#echoGrad)" stroke-width="8" fill="none" opacity="0.65"/>
+
+  <!-- Center core -->
+  <circle cx="256" cy="256" r="40" fill="url(#echoGrad)"/>
+
+  <!-- Sound emanation lines -->
+  <path d="M256 80 L256 40" stroke="url(#echoGrad)" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+  <path d="M256 432 L256 472" stroke="url(#echoGrad)" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+  <path d="M80 256 L40 256" stroke="url(#echoGrad)" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+  <path d="M432 256 L472 256" stroke="url(#echoGrad)" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+
+  <!-- Diagonal emanation lines -->
+  <path d="M132 132 L104 104" stroke="url(#echoGrad)" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+  <path d="M380 132 L408 104" stroke="url(#echoGrad)" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+  <path d="M132 380 L104 408" stroke="url(#echoGrad)" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+  <path d="M380 380 L408 408" stroke="url(#echoGrad)" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+</svg>

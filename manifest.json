@@ -1,0 +1,20 @@
+{
+  "name": "Echo - Body Music Instrument",
+  "short_name": "Echo",
+  "description": "Transform your body into a musical instrument using AI-powered motion tracking",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#00d9ff",
+  "orientation": "landscape",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["music", "entertainment", "utilities"],
+  "prefer_related_applications": false
+}
