@@ -644,7 +644,7 @@
         </div>
         <div class="help-item">
             <span class="help-icon">🖐️</span>
-            <span class="help-text"><strong>8 keys</strong>: 4 per hand (L=low, R=high)</span>
+            <span class="help-text"><strong>8 keys</strong>: 4 per hand, <strong>height = pitch</strong></span>
         </div>
         <div class="help-item">
             <span class="help-icon">⬇️</span>
@@ -697,9 +697,9 @@
                 octaveRange: [3, 5],        // Left hand lower, right hand higher
             },
             drums: {
-                nodThreshold: 0.015,
-                tiltThreshold: 0.02,
-                cooldown: 120,
+                nodThreshold: 0.025,       // Increased - need more deliberate nods
+                tiltThreshold: 0.035,      // Increased - need more deliberate tilts
+                cooldown: 180,             // Longer cooldown to prevent accidental triggers
             },
             particles: {
                 maxParticles: 1500,
@@ -1128,6 +1128,8 @@
         }
 
         // ==================== RECORDING ====================
+        let recordingTimeInterval = null;
+
         function recordEvent(type, data) {
             if (state.isRecording) {
                 state.recordedEvents.push({ timestamp: Date.now() - state.recordStartTime, type, data });
@@ -1141,6 +1143,8 @@
             recordBtn.classList.add('recording');
             recordBtn.innerHTML = '<span>■</span> Stop';
             recordingIndicator.classList.add('show');
+            // Use setInterval instead of requestAnimationFrame to avoid blocking main loop
+            recordingTimeInterval = setInterval(updateRecordingTime, 500);
             updateRecordingTime();
         }
 
@@ -1149,14 +1153,23 @@
             recordBtn.classList.remove('recording');
             recordBtn.innerHTML = '<span>●</span> Record';
             recordingIndicator.classList.remove('show');
+            if (recordingTimeInterval) {
+                clearInterval(recordingTimeInterval);
+                recordingTimeInterval = null;
+            }
             if (state.recordedEvents.length > 0) playBtn.disabled = false;
         }
 
         function updateRecordingTime() {
-            if (!state.isRecording) return;
+            if (!state.isRecording) {
+                if (recordingTimeInterval) {
+                    clearInterval(recordingTimeInterval);
+                    recordingTimeInterval = null;
+                }
+                return;
+            }
             const elapsed = Math.floor((Date.now() - state.recordStartTime) / 1000);
             recordingTimeEl.textContent = `${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, '0')}`;
-            requestAnimationFrame(updateRecordingTime);
         }
 
         function playRecording() {
@@ -1313,6 +1326,7 @@
                 // Determine if left or right hand based on position in frame
                 // In mirrored view: higher X = left side of screen = user's left hand
                 const handCenterX = (hand[0].x + hand[5].x + hand[17].x) / 3;
+                const handCenterY = (hand[0].y + hand[9].y) / 2;  // Average of wrist and middle finger base
                 const isLeftHand = handCenterX > 0.5;
                 const stateHandIdx = isLeftHand ? 0 : 1;
 
@@ -1321,8 +1335,17 @@
 
                 const handState = state.strings.hands[stateHandIdx];
 
-                // Octave based on hand: left = lower, right = higher
-                const octave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
+                // Base octave based on hand: left = lower, right = higher
+                const baseOctave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
+
+                // Hand height affects octave: higher hand = higher pitch
+                // Y ranges from 0 (top) to 1 (bottom), so invert it
+                // Map hand Y position to octave modifier: -1 to +1
+                const heightMod = Math.round(mapRange(1 - handCenterY, 0.2, 0.8, -1, 1));
+                const octave = Math.max(2, Math.min(6, baseOctave + heightMod));
+
+                // Store current octave for display
+                handState.currentOctave = octave;
 
                 // Get thumb tip position for THIS hand only
                 const thumbTip = hand[4];
@@ -1418,6 +1441,7 @@
                 state.drums.level = 0;
                 state.drums.prevHead = null;
                 state.drums.smoothedHead = null;
+                state.drums.velocityBuffer = null;
                 return;
             }
 
@@ -1431,61 +1455,77 @@
             const headX = (leftCheek.x + rightCheek.x) / 2;
             const headTilt = leftCheek.y - rightCheek.y;
 
-            // Smooth head position
+            // Smooth head position with lighter smoothing for more responsiveness
             if (!state.drums.smoothedHead) {
                 state.drums.smoothedHead = { y: headY, x: headX, tilt: headTilt };
+                state.drums.velocityBuffer = { y: [], tilt: [] };
             } else {
-                state.drums.smoothedHead.y = smooth(state.drums.smoothedHead.y, headY, 0.5);
-                state.drums.smoothedHead.x = smooth(state.drums.smoothedHead.x, headX, 0.5);
-                state.drums.smoothedHead.tilt = smooth(state.drums.smoothedHead.tilt, headTilt, 0.5);
+                state.drums.smoothedHead.y = smooth(state.drums.smoothedHead.y, headY, 0.4);
+                state.drums.smoothedHead.x = smooth(state.drums.smoothedHead.x, headX, 0.4);
+                state.drums.smoothedHead.tilt = smooth(state.drums.smoothedHead.tilt, headTilt, 0.4);
             }
 
             if (state.drums.prevHead) {
                 const velY = state.drums.smoothedHead.y - state.drums.prevHead.y;
                 const tiltChange = state.drums.smoothedHead.tilt - state.drums.prevHead.tilt;
 
-                // NOD DOWN = KICK
-                if (velY > CONFIG.drums.nodThreshold &&
+                // Buffer velocities for more robust detection (average over last few frames)
+                state.drums.velocityBuffer.y.push(velY);
+                state.drums.velocityBuffer.tilt.push(tiltChange);
+                if (state.drums.velocityBuffer.y.length > 3) state.drums.velocityBuffer.y.shift();
+                if (state.drums.velocityBuffer.tilt.length > 3) state.drums.velocityBuffer.tilt.shift();
+
+                const avgVelY = state.drums.velocityBuffer.y.reduce((a, b) => a + b, 0) / state.drums.velocityBuffer.y.length;
+                const avgTiltChange = state.drums.velocityBuffer.tilt.reduce((a, b) => a + b, 0) / state.drums.velocityBuffer.tilt.length;
+
+                // NOD DOWN = KICK (requires consistent downward motion)
+                if (avgVelY > CONFIG.drums.nodThreshold &&
                     (!state.drums.lastTrigger.kick || now - state.drums.lastTrigger.kick > CONFIG.drums.cooldown)) {
-                    const velocity = mapRange(Math.abs(velY), CONFIG.drums.nodThreshold, 0.04, 0.5, 1);
+                    const velocity = mapRange(Math.abs(avgVelY), CONFIG.drums.nodThreshold, 0.06, 0.6, 1);
                     audioEngine.drums.trigger('kick', velocity, state.drumKit);
                     emitParticles(canvas.width / 2, canvas.height / 2 + 100, 'rgb(100, 255, 100)', 'drums', 20);
                     showTrigger('⬇');
                     state.drums.lastTrigger.kick = now;
                     state.drums.level = 1;
+                    state.drums.velocityBuffer.y = []; // Clear buffer after trigger
                     recordEvent('drum', { drum: 'kick', velocity, color: 'rgb(100, 255, 100)', emoji: '⬇' });
                 }
 
-                // NOD UP = SNARE
-                if (velY < -CONFIG.drums.nodThreshold &&
+                // NOD UP = SNARE (requires consistent upward motion)
+                else if (avgVelY < -CONFIG.drums.nodThreshold &&
                     (!state.drums.lastTrigger.snare || now - state.drums.lastTrigger.snare > CONFIG.drums.cooldown)) {
-                    const velocity = mapRange(Math.abs(velY), CONFIG.drums.nodThreshold, 0.04, 0.5, 1);
+                    const velocity = mapRange(Math.abs(avgVelY), CONFIG.drums.nodThreshold, 0.06, 0.6, 1);
                     audioEngine.drums.trigger('snare', velocity, state.drumKit);
                     emitParticles(canvas.width / 2, canvas.height / 2 - 50, 'rgb(255, 255, 150)', 'drums', 20);
                     showTrigger('⬆');
                     state.drums.lastTrigger.snare = now;
                     state.drums.level = 1;
+                    state.drums.velocityBuffer.y = []; // Clear buffer after trigger
                     recordEvent('drum', { drum: 'snare', velocity, color: 'rgb(255, 255, 150)', emoji: '⬆' });
                 }
 
-                // TILT LEFT = HI-HAT
-                if (tiltChange > CONFIG.drums.tiltThreshold &&
-                    (!state.drums.lastTrigger.hihat || now - state.drums.lastTrigger.hihat > CONFIG.drums.cooldown / 2)) {
-                    audioEngine.drums.trigger('hihat', 0.6, state.drumKit);
+                // TILT LEFT = HI-HAT (requires consistent tilt)
+                if (avgTiltChange > CONFIG.drums.tiltThreshold &&
+                    (!state.drums.lastTrigger.hihat || now - state.drums.lastTrigger.hihat > CONFIG.drums.cooldown)) {
+                    const velocity = mapRange(Math.abs(avgTiltChange), CONFIG.drums.tiltThreshold, 0.08, 0.5, 0.8);
+                    audioEngine.drums.trigger('hihat', velocity, state.drumKit);
                     emitParticles(canvas.width / 2 - 100, canvas.height / 2, 'rgb(255, 255, 200)', 'drums', 10);
                     state.drums.lastTrigger.hihat = now;
                     state.drums.level = 0.7;
-                    recordEvent('drum', { drum: 'hihat', velocity: 0.6, color: 'rgb(255, 255, 200)', emoji: '◀' });
+                    state.drums.velocityBuffer.tilt = []; // Clear buffer after trigger
+                    recordEvent('drum', { drum: 'hihat', velocity, color: 'rgb(255, 255, 200)', emoji: '◀' });
                 }
 
-                // TILT RIGHT = TOM
-                if (tiltChange < -CONFIG.drums.tiltThreshold &&
+                // TILT RIGHT = TOM (requires consistent tilt)
+                else if (avgTiltChange < -CONFIG.drums.tiltThreshold &&
                     (!state.drums.lastTrigger.tom || now - state.drums.lastTrigger.tom > CONFIG.drums.cooldown)) {
-                    audioEngine.drums.trigger('tom', 0.8, state.drumKit);
+                    const velocity = mapRange(Math.abs(avgTiltChange), CONFIG.drums.tiltThreshold, 0.08, 0.6, 0.9);
+                    audioEngine.drums.trigger('tom', velocity, state.drumKit);
                     emitParticles(canvas.width / 2 + 100, canvas.height / 2, 'rgb(150, 255, 100)', 'drums', 15);
                     state.drums.lastTrigger.tom = now;
                     state.drums.level = 0.8;
-                    recordEvent('drum', { drum: 'tom', velocity: 0.8, color: 'rgb(150, 255, 100)', emoji: '▶' });
+                    state.drums.velocityBuffer.tilt = []; // Clear buffer after trigger
+                    recordEvent('drum', { drum: 'tom', velocity, color: 'rgb(150, 255, 100)', emoji: '▶' });
                 }
             }
 
@@ -1503,10 +1543,15 @@
             hands.forEach(hand => {
                 // Determine which hand (left/right) for state lookup
                 const handCenterX = (hand[0].x + hand[5].x + hand[17].x) / 3;
+                const handCenterY = (hand[0].y + hand[9].y) / 2;
                 const isLeftHand = handCenterX > 0.5;
                 const stateHandIdx = isLeftHand ? 0 : 1;
                 const handState = state.strings.hands[stateHandIdx];
-                const octave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
+
+                // Calculate current octave based on hand height (same logic as processStrings)
+                const baseOctave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
+                const heightMod = Math.round(mapRange(1 - handCenterY, 0.2, 0.8, -1, 1));
+                const octave = Math.max(2, Math.min(6, baseOctave + heightMod));
 
                 // Draw skeleton connections
                 const connections = [
