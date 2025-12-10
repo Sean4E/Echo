@@ -692,8 +692,8 @@
                     chromatic: ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G']
                 },
                 // Thumb-touch detection - finger touches thumb to play
-                touchThreshold: 0.055,      // Distance threshold for thumb-finger contact
-                cooldown: 100,              // ms between same finger triggers
+                touchThreshold: 0.035,      // Distance threshold for thumb-finger contact (very tight)
+                cooldown: 150,              // ms between same finger triggers
                 octaveRange: [3, 5],        // Left hand lower, right hand higher
             },
             drums: {
@@ -1284,11 +1284,14 @@
         // Thumb-touch finger detection - like playing guitar or typing
         // Each finger touching the thumb on the same hand triggers a note
         // 8 total keys: 4 fingers x 2 hands
-        function processStrings(handResults, handedness) {
+        function processStrings(handResults) {
             if (state.mode === 'voice' || state.mode === 'drums') {
                 state.strings.level = 0;
                 return;
             }
+
+            // Track which hands we've seen this frame
+            const handsProcessed = [false, false]; // [left, right]
 
             if (!handResults || handResults.length === 0) {
                 state.strings.level = 0;
@@ -1305,19 +1308,23 @@
             const scale = CONFIG.strings.scales[state.currentScale];
             const now = Date.now();
 
-            // Process each detected hand
-            handResults.forEach((hand, handIdx) => {
-                // Determine if left or right hand (0 = right in mirrored view, 1 = left)
-                // We'll use hand position: left side of screen = left hand
+            // Process each detected hand independently
+            handResults.forEach((hand) => {
+                // Determine if left or right hand based on position in frame
+                // In mirrored view: higher X = left side of screen = user's left hand
                 const handCenterX = (hand[0].x + hand[5].x + hand[17].x) / 3;
-                const isLeftHand = handCenterX > 0.5;  // Mirrored: right side of normalized coords = left hand
+                const isLeftHand = handCenterX > 0.5;
                 const stateHandIdx = isLeftHand ? 0 : 1;
+
+                // Mark this hand as processed
+                handsProcessed[stateHandIdx] = true;
+
                 const handState = state.strings.hands[stateHandIdx];
 
                 // Octave based on hand: left = lower, right = higher
                 const octave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
 
-                // Get thumb tip position
+                // Get thumb tip position for THIS hand only
                 const thumbTip = hand[4];
 
                 // Finger tips: index(8), middle(12), ring(16), pinky(20)
@@ -1332,7 +1339,7 @@
                     const tip = hand[finger.idx];
                     const fingerState = handState.fingers[fingerIdx];
 
-                    // Calculate 3D distance between fingertip and thumb tip
+                    // Calculate 3D distance between fingertip and thumb tip (same hand)
                     const dx = tip.x - thumbTip.x;
                     const dy = tip.y - thumbTip.y;
                     const dz = (tip.z || 0) - (thumbTip.z || 0);
@@ -1347,7 +1354,7 @@
                         const note = scale[noteIdx % scale.length];
 
                         // Velocity based on how close fingers are (closer = harder press)
-                        const velocity = mapRange(distance, CONFIG.strings.touchThreshold, 0.02, 0.6, 1);
+                        const velocity = mapRange(distance, CONFIG.strings.touchThreshold, 0.015, 0.6, 1);
 
                         audioEngine.strings.pluck(note, octave, velocity, state.stringType);
 
@@ -1386,6 +1393,16 @@
                         fingerState.active = false;
                     }
                 });
+            });
+
+            // Reset fingers for any hands not detected this frame
+            handsProcessed.forEach((processed, handIdx) => {
+                if (!processed) {
+                    state.strings.hands[handIdx].fingers.forEach(f => {
+                        f.touching = false;
+                        f.active = false;
+                    });
+                }
             });
 
             state.strings.level *= 0.9;
@@ -1501,8 +1518,8 @@
                     [5, 9], [9, 13], [13, 17]
                 ];
 
-                ctx.strokeStyle = 'rgba(100, 200, 255, 0.25)';
-                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgba(100, 200, 255, 0.2)';
+                ctx.lineWidth = 1;
 
                 connections.forEach(([i, j]) => {
                     const p1 = getLandmarkPos(hand[i]);
@@ -1513,26 +1530,16 @@
                     ctx.stroke();
                 });
 
-                // Draw thumb with special highlight
+                // Draw thumb - simple white circle (collision target)
                 const thumbTip = hand[4];
                 const thumbPos = getLandmarkPos(thumbTip);
 
-                // Thumb glow
-                const thumbGradient = ctx.createRadialGradient(thumbPos.x, thumbPos.y, 0, thumbPos.x, thumbPos.y, 35);
-                thumbGradient.addColorStop(0, '#fff');
-                thumbGradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.3)');
-                thumbGradient.addColorStop(1, 'transparent');
+                // Thumb circle - clean white
                 ctx.beginPath();
-                ctx.arc(thumbPos.x, thumbPos.y, 35, 0, Math.PI * 2);
-                ctx.fillStyle = thumbGradient;
-                ctx.fill();
-
-                // Thumb circle
-                ctx.beginPath();
-                ctx.arc(thumbPos.x, thumbPos.y, 18, 0, Math.PI * 2);
+                ctx.arc(thumbPos.x, thumbPos.y, 16, 0, Math.PI * 2);
                 ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
                 ctx.fill();
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
                 ctx.lineWidth = 2;
                 ctx.stroke();
 
@@ -1544,59 +1551,30 @@
                     const pos = getLandmarkPos(tip);
                     const fingerState = handState.fingers[fingerIdx];
                     const isActive = fingerState.active;
-                    const isTouching = fingerState.touching;
 
-                    // Calculate distance to thumb for visual feedback
-                    const dx = tip.x - thumbTip.x;
-                    const dy = tip.y - thumbTip.y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-                    const isClose = distance < CONFIG.strings.touchThreshold * 1.5;
+                    // Size based on state
+                    const baseSize = 14;
+                    const size = isActive ? baseSize + 6 : baseSize;
 
-                    // Draw connection line to thumb when close
-                    if (isClose) {
-                        ctx.beginPath();
-                        ctx.moveTo(pos.x, pos.y);
-                        ctx.lineTo(thumbPos.x, thumbPos.y);
-                        ctx.strokeStyle = isTouching
-                            ? fingerColors[fingerIdx]
-                            : `rgba(255, 255, 255, ${mapRange(distance, CONFIG.strings.touchThreshold * 1.5, CONFIG.strings.touchThreshold, 0.1, 0.5)})`;
-                        ctx.lineWidth = isTouching ? 4 : 2;
+                    // Simple colored circle for fingertip
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
+                    ctx.fillStyle = isActive ? '#fff' : fingerColors[fingerIdx];
+                    ctx.fill();
+
+                    // Border when active
+                    if (isActive) {
+                        ctx.strokeStyle = fingerColors[fingerIdx];
+                        ctx.lineWidth = 3;
                         ctx.stroke();
                     }
 
-                    // Size based on state
-                    const baseSize = 22;
-                    const size = isActive ? baseSize + 12 : baseSize;
-
-                    // Glow effect for active fingers
-                    if (isActive) {
-                        const glowGradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size + 25);
-                        glowGradient.addColorStop(0, fingerColors[fingerIdx]);
-                        glowGradient.addColorStop(0.4, fingerColors[fingerIdx] + '88');
-                        glowGradient.addColorStop(1, 'transparent');
-                        ctx.beginPath();
-                        ctx.arc(pos.x, pos.y, size + 25, 0, Math.PI * 2);
-                        ctx.fillStyle = glowGradient;
-                        ctx.fill();
-                    }
-
-                    // Main fingertip circle
-                    const gradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size);
-                    gradient.addColorStop(0, isActive ? '#fff' : fingerColors[fingerIdx]);
-                    gradient.addColorStop(0.6, isActive ? fingerColors[fingerIdx] : fingerColors[fingerIdx] + 'cc');
-                    gradient.addColorStop(1, 'transparent');
-
-                    ctx.beginPath();
-                    ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
-                    ctx.fillStyle = gradient;
-                    ctx.fill();
-
-                    // Note label - show note based on hand position
+                    // Note label
                     const noteIdx = (isLeftHand ? 0 : 4) + fingerIdx;
                     const noteLabel = scale[noteIdx % scale.length];
 
                     ctx.fillStyle = isActive ? '#000' : '#fff';
-                    ctx.font = 'bold 14px sans-serif';
+                    ctx.font = 'bold 11px sans-serif';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(noteLabel, pos.x, pos.y);
@@ -1604,11 +1582,11 @@
 
                 // Show hand label and octave
                 const wrist = getLandmarkPos(hand[0]);
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-                ctx.font = 'bold 12px sans-serif';
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.font = '11px sans-serif';
                 ctx.textAlign = 'center';
                 const handLabel = isLeftHand ? 'L' : 'R';
-                ctx.fillText(`${handLabel} • Oct ${octave}`, wrist.x, wrist.y + 25);
+                ctx.fillText(`${handLabel}${octave}`, wrist.x, wrist.y + 20);
             });
         }
 
