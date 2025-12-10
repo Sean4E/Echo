@@ -639,12 +639,12 @@
             <span class="help-text"><strong>Open mouth</strong> to sing (eyebrows = pitch)</span>
         </div>
         <div class="help-item">
-            <span class="help-icon">👇</span>
-            <span class="help-text"><strong>Tap fingers down</strong> = 4 notes (like piano)</span>
+            <span class="help-icon">👌</span>
+            <span class="help-text"><strong>Touch thumb</strong> with finger = play note</span>
         </div>
         <div class="help-item">
-            <span class="help-icon">↕️</span>
-            <span class="help-text"><strong>Hand height</strong> = octave (3-6)</span>
+            <span class="help-icon">🖐️</span>
+            <span class="help-text"><strong>8 keys</strong>: 4 per hand (L=low, R=high)</span>
         </div>
         <div class="help-item">
             <span class="help-icon">⬇️</span>
@@ -686,16 +686,15 @@
             },
             strings: {
                 scales: {
-                    major: ['C', 'D', 'E', 'G', 'A'],
-                    minor: ['A', 'C', 'D', 'E', 'G'],
-                    pentatonic: ['C', 'D', 'E', 'G', 'A'],
-                    chromatic: ['C', 'C#', 'D', 'D#', 'E']
+                    major: ['C', 'D', 'E', 'F', 'G', 'A', 'B', 'C'],      // 8 notes for 8 fingers
+                    minor: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'A'],
+                    pentatonic: ['C', 'D', 'E', 'G', 'A', 'C', 'D', 'E'],
+                    chromatic: ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G']
                 },
-                // Velocity-based detection - triggers on downward finger movement
-                velocityThreshold: 0.008,   // Minimum downward velocity to trigger
-                extensionThreshold: 0.02,   // Finger must be extended this much before it can trigger
-                cooldown: 150,              // ms between same finger triggers
-                octaveRange: [3, 6],
+                // Thumb-touch detection - finger touches thumb to play
+                touchThreshold: 0.055,      // Distance threshold for thumb-finger contact
+                cooldown: 100,              // ms between same finger triggers
+                octaveRange: [3, 5],        // Left hand lower, right hand higher
             },
             drums: {
                 nodThreshold: 0.015,
@@ -720,14 +719,27 @@
             voice: { active: false, level: 0 },
             strings: {
                 level: 0,
-                // Track each finger with velocity-based detection
-                // Like piano keys: must lift finger (extend) before pressing again
-                fingerStates: [
-                    { prevY: null, velocity: 0, wasExtended: true, lastTrigger: 0, active: false },
-                    { prevY: null, velocity: 0, wasExtended: true, lastTrigger: 0, active: false },
-                    { prevY: null, velocity: 0, wasExtended: true, lastTrigger: 0, active: false },
-                    { prevY: null, velocity: 0, wasExtended: true, lastTrigger: 0, active: false },
-                    { prevY: null, velocity: 0, wasExtended: true, lastTrigger: 0, active: false }
+                // Track 8 fingers (4 per hand) - thumb touch detection
+                // Each hand: index, middle, ring, pinky touching thumb
+                hands: [
+                    // Left hand (lower octave)
+                    {
+                        fingers: [
+                            { touching: false, lastTrigger: 0, active: false },
+                            { touching: false, lastTrigger: 0, active: false },
+                            { touching: false, lastTrigger: 0, active: false },
+                            { touching: false, lastTrigger: 0, active: false }
+                        ]
+                    },
+                    // Right hand (higher octave)
+                    {
+                        fingers: [
+                            { touching: false, lastTrigger: 0, active: false },
+                            { touching: false, lastTrigger: 0, active: false },
+                            { touching: false, lastTrigger: 0, active: false },
+                            { touching: false, lastTrigger: 0, active: false }
+                        ]
+                    }
                 ]
             },
             drums: { level: 0, lastTrigger: {}, prevHead: null, smoothedHead: null },
@@ -1269,9 +1281,10 @@
             }
         }
 
-        // Velocity-based finger detection - like playing piano keys
-        // Detects the DOWNWARD MOTION of each fingertip
-        function processStrings(handResults) {
+        // Thumb-touch finger detection - like playing guitar or typing
+        // Each finger touching the thumb on the same hand triggers a note
+        // 8 total keys: 4 fingers x 2 hands
+        function processStrings(handResults, handedness) {
             if (state.mode === 'voice' || state.mode === 'drums') {
                 state.strings.level = 0;
                 return;
@@ -1279,12 +1292,12 @@
 
             if (!handResults || handResults.length === 0) {
                 state.strings.level = 0;
-                // Reset finger states when no hand detected
-                state.strings.fingerStates.forEach(f => {
-                    f.prevY = null;
-                    f.velocity = 0;
-                    f.wasExtended = true;
-                    f.active = false;
+                // Reset all finger states when no hands detected
+                state.strings.hands.forEach(hand => {
+                    hand.fingers.forEach(f => {
+                        f.touching = false;
+                        f.active = false;
+                    });
                 });
                 return;
             }
@@ -1292,74 +1305,84 @@
             const scale = CONFIG.strings.scales[state.currentScale];
             const now = Date.now();
 
-            handResults.forEach((hand) => {
-                const wrist = hand[0];
-                const handHeight = 1 - wrist.y;
-                const octave = Math.floor(mapRange(handHeight, 0.2, 0.8, CONFIG.strings.octaveRange[0], CONFIG.strings.octaveRange[1]));
+            // Process each detected hand
+            handResults.forEach((hand, handIdx) => {
+                // Determine if left or right hand (0 = right in mirrored view, 1 = left)
+                // We'll use hand position: left side of screen = left hand
+                const handCenterX = (hand[0].x + hand[5].x + hand[17].x) / 3;
+                const isLeftHand = handCenterX > 0.5;  // Mirrored: right side of normalized coords = left hand
+                const stateHandIdx = isLeftHand ? 0 : 1;
+                const handState = state.strings.hands[stateHandIdx];
 
-                // Get palm center for reference (average of MCP joints)
-                const palmY = (hand[5].y + hand[9].y + hand[13].y + hand[17].y) / 4;
+                // Octave based on hand: left = lower, right = higher
+                const octave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
 
-                // Finger tip indices (skip thumb - index 0, it's unreliable)
-                const fingers = [
-                    { tip: 8, pip: 6, name: 'index', noteIdx: 0 },
-                    { tip: 12, pip: 10, name: 'middle', noteIdx: 1 },
-                    { tip: 16, pip: 14, name: 'ring', noteIdx: 2 },
-                    { tip: 20, pip: 18, name: 'pinky', noteIdx: 3 }
+                // Get thumb tip position
+                const thumbTip = hand[4];
+
+                // Finger tips: index(8), middle(12), ring(16), pinky(20)
+                const fingerTips = [
+                    { idx: 8, name: 'index' },
+                    { idx: 12, name: 'middle' },
+                    { idx: 16, name: 'ring' },
+                    { idx: 20, name: 'pinky' }
                 ];
 
-                // Process each finger (4 fingers, no thumb)
-                fingers.forEach((finger, idx) => {
-                    const tip = hand[finger.tip];
-                    const pip = hand[finger.pip];
-                    const fingerState = state.strings.fingerStates[idx];
+                fingerTips.forEach((finger, fingerIdx) => {
+                    const tip = hand[finger.idx];
+                    const fingerState = handState.fingers[fingerIdx];
 
-                    // Calculate finger extension relative to palm
-                    // Negative = finger is above palm (extended), Positive = below (curled)
-                    const extension = tip.y - palmY;
-                    const isExtended = extension < -CONFIG.strings.extensionThreshold;
+                    // Calculate 3D distance between fingertip and thumb tip
+                    const dx = tip.x - thumbTip.x;
+                    const dy = tip.y - thumbTip.y;
+                    const dz = (tip.z || 0) - (thumbTip.z || 0);
+                    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-                    // Calculate velocity (change in tip Y position)
-                    // Positive velocity = finger moving down
-                    if (fingerState.prevY !== null) {
-                        const rawVelocity = tip.y - fingerState.prevY;
-                        // Smooth the velocity slightly to reduce noise
-                        fingerState.velocity = fingerState.velocity * 0.3 + rawVelocity * 0.7;
-                    }
-                    fingerState.prevY = tip.y;
+                    const isTouching = distance < CONFIG.strings.touchThreshold;
 
-                    // Trigger conditions (like a piano key):
-                    // 1. Finger was extended (lifted)
-                    // 2. Finger is now moving DOWN fast enough
-                    // 3. Cooldown has passed
-                    const isMovingDown = fingerState.velocity > CONFIG.strings.velocityThreshold;
-                    const canTrigger = fingerState.wasExtended &&
-                                       isMovingDown &&
-                                       (now - fingerState.lastTrigger > CONFIG.strings.cooldown);
+                    // Trigger on touch (transition from not touching to touching)
+                    if (isTouching && !fingerState.touching && (now - fingerState.lastTrigger > CONFIG.strings.cooldown)) {
+                        // Note index: left hand = 0-3, right hand = 4-7
+                        const noteIdx = (isLeftHand ? 0 : 4) + fingerIdx;
+                        const note = scale[noteIdx % scale.length];
 
-                    if (canTrigger) {
-                        // Map the 4 fingers to first 4 notes of scale
-                        const note = scale[finger.noteIdx % scale.length];
-                        // Velocity based on how fast the finger moved
-                        const noteVelocity = mapRange(fingerState.velocity, CONFIG.strings.velocityThreshold, 0.03, 0.5, 1);
+                        // Velocity based on how close fingers are (closer = harder press)
+                        const velocity = mapRange(distance, CONFIG.strings.touchThreshold, 0.02, 0.6, 1);
 
-                        audioEngine.strings.pluck(note, octave, noteVelocity, state.stringType);
+                        audioEngine.strings.pluck(note, octave, velocity, state.stringType);
 
-                        const tipPos = getLandmarkPos(tip);
-                        const colors = ['rgb(150, 100, 255)', 'rgb(255, 100, 200)', 'rgb(100, 255, 180)', 'rgb(255, 200, 100)'];
-                        emitParticles(tipPos.x, tipPos.y, colors[idx], 'strings', 15);
+                        // Get midpoint between thumb and finger for particle emission
+                        const midX = (tip.x + thumbTip.x) / 2;
+                        const midY = (tip.y + thumbTip.y) / 2;
+                        const midPos = getLandmarkPos({ x: midX, y: midY, z: 0 });
+
+                        // Colors for each finger
+                        const colors = [
+                            'rgb(255, 100, 100)',   // index - red
+                            'rgb(255, 200, 100)',   // middle - orange
+                            'rgb(100, 255, 150)',   // ring - green
+                            'rgb(100, 150, 255)'    // pinky - blue
+                        ];
+                        emitParticles(midPos.x, midPos.y, colors[fingerIdx], 'strings', 15);
 
                         state.strings.level = 1;
                         fingerState.lastTrigger = now;
-                        fingerState.wasExtended = false;  // Must lift finger before next trigger
                         fingerState.active = true;
 
-                        recordEvent('string', { note, octave, velocity: noteVelocity, x: tipPos.x, y: tipPos.y, color: colors[idx] });
+                        recordEvent('string', {
+                            note, octave, velocity,
+                            x: midPos.x, y: midPos.y,
+                            color: colors[fingerIdx],
+                            hand: isLeftHand ? 'left' : 'right',
+                            finger: finger.name
+                        });
                     }
 
-                    // Reset "wasExtended" when finger lifts back up
-                    if (isExtended) {
-                        fingerState.wasExtended = true;
+                    // Update touching state
+                    fingerState.touching = isTouching;
+
+                    // Deactivate when finger separates from thumb
+                    if (!isTouching) {
                         fingerState.active = false;
                     }
                 });
@@ -1458,8 +1481,16 @@
             if (!hands || hands.length === 0) return;
 
             const scale = CONFIG.strings.scales[state.currentScale];
+            const fingerColors = ['#ff6464', '#ffb347', '#64ff8c', '#6496ff'];
 
             hands.forEach(hand => {
+                // Determine which hand (left/right) for state lookup
+                const handCenterX = (hand[0].x + hand[5].x + hand[17].x) / 3;
+                const isLeftHand = handCenterX > 0.5;
+                const stateHandIdx = isLeftHand ? 0 : 1;
+                const handState = state.strings.hands[stateHandIdx];
+                const octave = isLeftHand ? CONFIG.strings.octaveRange[0] : CONFIG.strings.octaveRange[1];
+
                 // Draw skeleton connections
                 const connections = [
                     [0, 1], [1, 2], [2, 3], [3, 4],
@@ -1470,7 +1501,7 @@
                     [5, 9], [9, 13], [13, 17]
                 ];
 
-                ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
+                ctx.strokeStyle = 'rgba(100, 200, 255, 0.25)';
                 ctx.lineWidth = 2;
 
                 connections.forEach(([i, j]) => {
@@ -1482,48 +1513,77 @@
                     ctx.stroke();
                 });
 
-                // Draw palm reference point
-                const palmY = (hand[5].y + hand[9].y + hand[13].y + hand[17].y) / 4;
-                const palmX = (hand[5].x + hand[9].x + hand[13].x + hand[17].x) / 4;
-                const palmPos = getLandmarkPos({ x: palmX, y: palmY, z: 0 });
+                // Draw thumb with special highlight
+                const thumbTip = hand[4];
+                const thumbPos = getLandmarkPos(thumbTip);
 
+                // Thumb glow
+                const thumbGradient = ctx.createRadialGradient(thumbPos.x, thumbPos.y, 0, thumbPos.x, thumbPos.y, 35);
+                thumbGradient.addColorStop(0, '#fff');
+                thumbGradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.3)');
+                thumbGradient.addColorStop(1, 'transparent');
                 ctx.beginPath();
-                ctx.arc(palmPos.x, palmPos.y, 8, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+                ctx.arc(thumbPos.x, thumbPos.y, 35, 0, Math.PI * 2);
+                ctx.fillStyle = thumbGradient;
                 ctx.fill();
 
-                // 4 fingers (no thumb) - index, middle, ring, pinky
+                // Thumb circle
+                ctx.beginPath();
+                ctx.arc(thumbPos.x, thumbPos.y, 18, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Finger tips: index(8), middle(12), ring(16), pinky(20)
                 const fingerTips = [8, 12, 16, 20];
-                const colors = ['#9b59b6', '#e91e63', '#00bcd4', '#ff9800'];
-                const fingerNames = ['1', '2', '3', '4'];
 
                 fingerTips.forEach((tipIdx, fingerIdx) => {
                     const tip = hand[tipIdx];
                     const pos = getLandmarkPos(tip);
-                    const fingerState = state.strings.fingerStates[fingerIdx];
+                    const fingerState = handState.fingers[fingerIdx];
                     const isActive = fingerState.active;
-                    const isExtended = fingerState.wasExtended;
+                    const isTouching = fingerState.touching;
+
+                    // Calculate distance to thumb for visual feedback
+                    const dx = tip.x - thumbTip.x;
+                    const dy = tip.y - thumbTip.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const isClose = distance < CONFIG.strings.touchThreshold * 1.5;
+
+                    // Draw connection line to thumb when close
+                    if (isClose) {
+                        ctx.beginPath();
+                        ctx.moveTo(pos.x, pos.y);
+                        ctx.lineTo(thumbPos.x, thumbPos.y);
+                        ctx.strokeStyle = isTouching
+                            ? fingerColors[fingerIdx]
+                            : `rgba(255, 255, 255, ${mapRange(distance, CONFIG.strings.touchThreshold * 1.5, CONFIG.strings.touchThreshold, 0.1, 0.5)})`;
+                        ctx.lineWidth = isTouching ? 4 : 2;
+                        ctx.stroke();
+                    }
 
                     // Size based on state
-                    const baseSize = 28;
-                    const size = isActive ? baseSize + 15 : baseSize;
+                    const baseSize = 22;
+                    const size = isActive ? baseSize + 12 : baseSize;
 
                     // Glow effect for active fingers
                     if (isActive) {
-                        const glowGradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size + 20);
-                        glowGradient.addColorStop(0, colors[fingerIdx]);
-                        glowGradient.addColorStop(0.5, colors[fingerIdx] + '66');
+                        const glowGradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size + 25);
+                        glowGradient.addColorStop(0, fingerColors[fingerIdx]);
+                        glowGradient.addColorStop(0.4, fingerColors[fingerIdx] + '88');
                         glowGradient.addColorStop(1, 'transparent');
                         ctx.beginPath();
-                        ctx.arc(pos.x, pos.y, size + 20, 0, Math.PI * 2);
+                        ctx.arc(pos.x, pos.y, size + 25, 0, Math.PI * 2);
                         ctx.fillStyle = glowGradient;
                         ctx.fill();
                     }
 
                     // Main fingertip circle
                     const gradient = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size);
-                    gradient.addColorStop(0, isActive ? '#fff' : colors[fingerIdx]);
-                    gradient.addColorStop(0.7, isActive ? colors[fingerIdx] : colors[fingerIdx] + 'aa');
+                    gradient.addColorStop(0, isActive ? '#fff' : fingerColors[fingerIdx]);
+                    gradient.addColorStop(0.6, isActive ? fingerColors[fingerIdx] : fingerColors[fingerIdx] + 'cc');
                     gradient.addColorStop(1, 'transparent');
 
                     ctx.beginPath();
@@ -1531,38 +1591,24 @@
                     ctx.fillStyle = gradient;
                     ctx.fill();
 
-                    // Ring to show "ready to trigger" state
-                    if (isExtended && !isActive) {
-                        ctx.beginPath();
-                        ctx.arc(pos.x, pos.y, size + 5, 0, Math.PI * 2);
-                        ctx.strokeStyle = colors[fingerIdx] + '88';
-                        ctx.lineWidth = 2;
-                        ctx.stroke();
-                    }
+                    // Note label - show note based on hand position
+                    const noteIdx = (isLeftHand ? 0 : 4) + fingerIdx;
+                    const noteLabel = scale[noteIdx % scale.length];
 
-                    // Note label
                     ctx.fillStyle = isActive ? '#000' : '#fff';
-                    ctx.font = 'bold 16px sans-serif';
+                    ctx.font = 'bold 14px sans-serif';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    const noteLabel = scale[fingerIdx % scale.length];
                     ctx.fillText(noteLabel, pos.x, pos.y);
-
-                    // Finger number below
-                    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-                    ctx.font = '10px sans-serif';
-                    ctx.fillText(fingerNames[fingerIdx], pos.x, pos.y + size + 10);
                 });
 
-                // Show octave indicator near wrist
+                // Show hand label and octave
                 const wrist = getLandmarkPos(hand[0]);
-                const handHeight = 1 - hand[0].y;
-                const octave = Math.floor(mapRange(handHeight, 0.2, 0.8, CONFIG.strings.octaveRange[0], CONFIG.strings.octaveRange[1]));
-
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                ctx.font = 'bold 14px sans-serif';
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+                ctx.font = 'bold 12px sans-serif';
                 ctx.textAlign = 'center';
-                ctx.fillText(`Oct ${octave}`, wrist.x, wrist.y + 30);
+                const handLabel = isLeftHand ? 'L' : 'R';
+                ctx.fillText(`${handLabel} • Oct ${octave}`, wrist.x, wrist.y + 25);
             });
         }
 
